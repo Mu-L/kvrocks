@@ -29,6 +29,7 @@
 #include "common/string_util.h"
 #include "parse_util.h"
 #include "storage/redis_metadata.h"
+#include "string_util.h"
 #include "time_util.h"
 
 namespace redis {
@@ -180,6 +181,41 @@ rocksdb::Status String::GetEx(engine::Context &ctx, const std::string &user_key,
   s = storage_->Write(ctx, storage_->DefaultWriteOptions(), batch->GetWriteBatch());
   if (!s.ok()) return s;
   return rocksdb::Status::OK();
+}
+
+rocksdb::Status String::DelEX(engine::Context &ctx, const std::string &user_key, const DelExOption &option,
+                              bool &deleted) {
+  deleted = false;
+  std::string val;
+  std::string ns_key = AppendNamespacePrefix(user_key);
+  rocksdb::Status s = getValue(ctx, ns_key, &val);
+  if (!s.ok()) return s;
+
+  bool matched = false;
+  switch (option.type) {
+    case DelExOption::NONE:
+      matched = true;
+      break;
+    case DelExOption::IFDEQ:
+      matched = option.value == util::StringDigest(val);
+      break;
+    case DelExOption::IFDNE:
+      matched = option.value != util::StringDigest(val);
+      break;
+    case DelExOption::IFEQ:
+      matched = option.value == val;
+      break;
+    case DelExOption::IFNE:
+      matched = option.value != val;
+      break;
+    default:
+      return rocksdb::Status::InvalidArgument();
+  }
+  if (matched) {
+    s = storage_->Delete(ctx, storage_->DefaultWriteOptions(), metadata_cf_handle_, ns_key);
+    deleted = s.ok();
+  }
+  return s;
 }
 
 rocksdb::Status String::GetSet(engine::Context &ctx, const std::string &user_key, const std::string &new_value,
